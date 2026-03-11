@@ -14,6 +14,11 @@ import { useLayer } from '../context/LayerContext';
 import { useConfirmation } from '../context/ConfirmationContext';
 import { toast } from 'sonner';
 import { useState } from 'react';
+import {
+  calculateWeightedCompleteness,
+  countCriticalGaps,
+  aggregateValidation,
+} from '../utils/calculations';
 
 const categoryCards = [
   {
@@ -96,6 +101,23 @@ export function DataHealth() {
   const [isValidating, setIsValidating] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
 
+  // ── Compute data completeness from asset parameters ──────────────
+  const logsLoaded    = Math.floor(selectedAsset.activeWells * 0.72);
+  const logGaps       = selectedAsset.activeWells - logsLoaded;
+
+  const dataCategories = [
+    { name: 'Static Model',               totalItems: 8,  validatedItems: 8,           criticalMissing: 0, weight: 0.25 },
+    { name: 'Well Data',                  totalItems: selectedAsset.activeWells, validatedItems: selectedAsset.activeWells, criticalMissing: 0, weight: 0.20 },
+    { name: 'Petrophysical Logs',         totalItems: selectedAsset.activeWells, validatedItems: logsLoaded, criticalMissing: Math.min(3, logGaps), weight: 0.20 },
+    { name: 'Geological Interpretations', totalItems: 20, validatedItems: Math.round(20 * 0.65), criticalMissing: 2, weight: 0.15 },
+    { name: 'Geophysical Data',           totalItems: 10, validatedItems: 10,          criticalMissing: 0, weight: 0.10 },
+    { name: 'Production History',         totalItems: selectedAsset.wells, validatedItems: Math.round(selectedAsset.wells * 0.45), criticalMissing: 1, weight: 0.10 },
+  ];
+
+  const overallCompleteness = calculateWeightedCompleteness(dataCategories);
+  const criticalGaps        = countCriticalGaps(dataCategories);
+  const { validated, total } = aggregateValidation(dataCategories);
+
   // Handle Validate All action
   const handleValidateAll = async () => {
     const confirmed = await confirm({
@@ -116,7 +138,7 @@ export function DataHealth() {
       setTimeout(() => {
         setIsValidating(false);
         toast.success('Validation Complete', {
-          description: '42/54 items validated. 3 critical gaps identified.',
+          description: `${validated}/${total} items validated. ${criticalGaps} critical gaps identified.`,
           duration: 5000
         });
       }, 3000);
@@ -252,17 +274,17 @@ export function DataHealth() {
       <div className="grid grid-cols-3 gap-4">
         <div className="bg-card border border-card-border rounded-lg p-5">
           <div className="text-sm text-text-secondary mb-1">Overall Completeness</div>
-          <div className="text-3xl font-bold text-text-primary">78%</div>
+          <div className="text-3xl font-bold text-text-primary">{Math.round(overallCompleteness)}%</div>
           <div className="text-xs text-success mt-1">+5% vs. last month</div>
         </div>
         <div className="bg-card border border-card-border rounded-lg p-5">
           <div className="text-sm text-text-secondary mb-1">Validated Items</div>
-          <div className="text-3xl font-bold text-success">42/54</div>
+          <div className="text-3xl font-bold text-success">{validated}/{total}</div>
           <div className="text-xs text-text-secondary mt-1">3 pending review</div>
         </div>
         <div className="bg-card border border-card-border rounded-lg p-5">
           <div className="text-sm text-text-secondary mb-1">Critical Gaps</div>
-          <div className="text-3xl font-bold text-danger">3</div>
+          <div className="text-3xl font-bold text-danger">{criticalGaps}</div>
           <div className="text-xs text-text-secondary mt-1">Requires attention</div>
         </div>
       </div>

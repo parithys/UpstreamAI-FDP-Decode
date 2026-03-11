@@ -10,42 +10,8 @@ import { useLayer } from '../context/LayerContext';
 import { LayerNavigation } from '../components/layers/LayerNavigation';
 import { useConfirmation } from '../context/ConfirmationContext';
 import { useNotifications } from '../context/NotificationsContext';
-
-const matchData = [
-  // History
-  { month: 'Jan 21', observed: 1200, simulated: 1180, confidenceLow: 1150, confidenceHigh: 1210 },
-  { month: 'Apr 21', observed: 1350, simulated: 1360, confidenceLow: 1320, confidenceHigh: 1390 },
-  { month: 'Jul 21', observed: 1450, simulated: 1440, confidenceLow: 1410, confidenceHigh: 1470 },
-  { month: 'Oct 21', observed: 1520, simulated: 1530, confidenceLow: 1490, confidenceHigh: 1560 },
-  { month: 'Jan 22', observed: 1580, simulated: 1575, confidenceLow: 1545, confidenceHigh: 1605 },
-  { month: 'Apr 22', observed: 1620, simulated: 1615, confidenceLow: 1585, confidenceHigh: 1645 },
-  { month: 'Jul 22', observed: 1650, simulated: 1660, confidenceLow: 1625, confidenceHigh: 1685 },
-  { month: 'Oct 22', observed: 1680, simulated: 1675, confidenceLow: 1645, confidenceHigh: 1705 },
-  { month: 'Jan 23', observed: 1700, simulated: 1705, confidenceLow: 1670, confidenceHigh: 1735 },
-  { month: 'Apr 23', observed: 1720, simulated: 1715, confidenceLow: 1685, confidenceHigh: 1750 },
-  { month: 'Jul 23', observed: 1740, simulated: 1745, confidenceLow: 1710, confidenceHigh: 1775 },
-  { month: 'Oct 23', observed: 1750, simulated: 1748, confidenceLow: 1715, confidenceHigh: 1780 },
-  { month: 'Jan 24', observed: 1760, simulated: 1762, confidenceLow: 1730, confidenceHigh: 1795 },
-  { month: 'Apr 24', observed: 1770, simulated: 1775, confidenceLow: 1740, confidenceHigh: 1805 },
-  { month: 'Jul 24', observed: 1775, simulated: 1780, confidenceLow: 1745, confidenceHigh: 1815 },
-  { month: 'Oct 24', observed: 1780, simulated: 1785, confidenceLow: 1750, confidenceHigh: 1820 },
-  { month: 'Jan 25', observed: 1785, simulated: 1790, confidenceLow: 1755, confidenceHigh: 1825 },
-  { month: 'Apr 25', observed: 1788, simulated: 1792, confidenceLow: 1758, confidenceHigh: 1828 },
-  { month: 'Jul 25', observed: 1790, simulated: 1795, confidenceLow: 1760, confidenceHigh: 1830 },
-  { month: 'Oct 25', observed: 1792, simulated: 1798, confidenceLow: 1762, confidenceHigh: 1832 },
-  { month: 'Jan 26', observed: 1795, simulated: 1800, confidenceLow: 1765, confidenceHigh: 1835 },
-  // Forecast (Observed is null)
-  { month: 'Apr 26', observed: null, simulated: 1802, confidenceLow: 1760, confidenceHigh: 1845 },
-  { month: 'Jul 26', observed: null, simulated: 1805, confidenceLow: 1762, confidenceHigh: 1848 },
-  { month: 'Oct 26', observed: null, simulated: 1808, confidenceLow: 1765, confidenceHigh: 1850 },
-  { month: 'Jan 27', observed: null, simulated: 1810, confidenceLow: 1768, confidenceHigh: 1855 },
-  { month: 'Jul 27', observed: null, simulated: 1812, confidenceLow: 1770, confidenceHigh: 1858 },
-  { month: 'Jan 28', observed: null, simulated: 1815, confidenceLow: 1772, confidenceHigh: 1860 },
-  { month: 'Jul 28', observed: null, simulated: 1818, confidenceLow: 1775, confidenceHigh: 1865 },
-  { month: 'Jan 29', observed: null, simulated: 1820, confidenceLow: 1778, confidenceHigh: 1870 },
-  { month: 'Jul 29', observed: null, simulated: 1822, confidenceLow: 1780, confidenceHigh: 1875 },
-  { month: 'Jan 30', observed: null, simulated: 1825, confidenceLow: 1782, confidenceHigh: 1880 },
-];
+import { useAsset } from '../context/AssetContext';
+import { generateMatchChartData, calculateHistoryMatchQuality } from '../utils/calculations';
 
 interface SavedSimulation {
   id: string;
@@ -98,10 +64,30 @@ export function HistoryMatching() {
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [isRunningSimulation, setIsRunningSimulation] = useState(false);
   const [simulationProgress, setSimulationProgress] = useState(0);
-  const [confidence, setConfidence] = useState(92);
+  const [_confidenceOverride, setConfidenceOverride] = useState<number | null>(null);
   const { globalLayerPreference, setGlobalLayerPreference } = useLayer();
   const { confirmSuccess, confirmWarning, confirmDanger } = useConfirmation();
   const { addNotification } = useNotifications();
+  const { selectedAsset } = useAsset();
+
+  // ── Generate chart data deterministically from asset parameters ──────
+  const matchData = generateMatchChartData(
+    selectedAsset.production.oil,
+    selectedAsset.declineRate,
+    selectedAsset.declineExponent,
+    selectedAsset.firstOilYear,
+    selectedAsset.firstOilYear,            // chart start = first oil
+    0,                                      // January
+    new Date().getFullYear() + 5,           // 5-year forecast horizon
+    3,                                      // quarterly steps
+    selectedAsset.historyMatchR2
+  );
+
+  // ── Computed match quality adjusted by slider parameters ─────────────
+  const baseR2 = selectedAsset.historyMatchR2;
+  const confidence = Math.round(Math.min(98, Math.max(80,
+    baseR2 * 100 + (permeability - 1.3) * 5 + (faultTrans - 0.7) * 3
+  )));
 
   // Save/Load state
   const [showSaveModal, setShowSaveModal] = useState(false);
@@ -138,11 +124,11 @@ export function HistoryMatching() {
           if (next >= 100) {
             clearInterval(simulationInterval);
             
-            // Update confidence based on parameters
-            const newConfidence = Math.min(95, Math.max(85, 
-              90 + (permeability - 1.3) * 5 + (faultTrans - 0.7) * 3
+            // confidence is now computed from asset + slider state (no override needed)
+            const newConfidence = Math.min(98, Math.max(80,
+              selectedAsset.historyMatchR2 * 100 + (permeability - 1.3) * 5 + (faultTrans - 0.7) * 3
             ));
-            setConfidence(Math.round(newConfidence));
+            setConfidenceOverride(Math.round(newConfidence));
             
             setIsRunningSimulation(false);
             setSimulationProgress(0);
@@ -204,22 +190,23 @@ export function HistoryMatching() {
         setFaultTrans(optimizedFault);
         setAquiferStrength(optimizedAquifer);
         
-        const newConfidence = 94 + Math.floor(Math.random() * 3);
-        setConfidence(newConfidence);
+        // confidence is now computed — no setter needed
+        const _newConf = 94 + Math.floor(Math.random() * 3);
+        setConfidenceOverride(_newConf);
         
         setIsOptimizing(false);
         
         toast.success('Optimization Complete', {
           id: 'optimize',
-          description: `Best match achieved with ${newConfidence}% confidence`
+          description: `Best match achieved with ${_newConf}% confidence`
         });
-        
+
         addNotification({
           type: 'success',
           priority: 'medium',
           category: 'simulation',
           title: 'AI Optimization Complete',
-          message: `Parameters optimized to ${newConfidence}% match quality`,
+          message: `Parameters optimized to ${_newConf}% match quality`,
           actionLabel: 'View Details',
           actionUrl: '/history-matching'
         });
@@ -297,7 +284,7 @@ export function HistoryMatching() {
     setPermeability(sim.permeability);
     setFaultTrans(sim.faultTrans);
     setAquiferStrength(sim.aquiferStrength);
-    setConfidence(sim.confidence);
+    setConfidenceOverride(sim.confidence);
     setShowLoadModal(false);
     
     toast.success('Simulation Loaded', {
@@ -381,7 +368,7 @@ export function HistoryMatching() {
       setPermeability(1.3);
       setFaultTrans(0.7);
       setAquiferStrength(1.0);
-      setConfidence(92);
+      setConfidenceOverride(null); // reset to computed value
       
       toast.info('Parameters Reset', {
         description: 'All parameters restored to defaults'
