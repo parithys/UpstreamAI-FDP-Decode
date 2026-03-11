@@ -1,0 +1,16 @@
+Remaining files to update:
+- MarketVolatility.tsx
+- Insights.tsx
+- DecisionApproval.tsx
+- FDPSummary.tsx
+- HistoryMatching.tsx
+- ExecutiveDashboard.tsx
+- SubsurfaceUncertainty.tsx
+- OperationalUncertainty.tsx
+- CrossDomainUncertainty.tsx
+- DeepDiveAnalytics.tsx
+- AILedIntegration.tsx
+- MultidisciplinaryWorkflow.tsx
+- GovernanceAudit.tsx
+- AIAgentsManagement.tsx
+- CrossDisciplineVisibility.tsx
