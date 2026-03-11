@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -19,80 +19,132 @@ import {
   Share2
 } from 'lucide-react';
 import { toast } from 'sonner';
-
-// Mock data for Production Forecast
-const productionForecastData = [
-  { year: 2024, p10: 145, p50: 120, p90: 95, actual: 118 },
-  { year: 2025, p10: 152, p50: 128, p90: 102, actual: 125 },
-  { year: 2026, p10: 158, p50: 135, p90: 110, actual: 132 },
-  { year: 2027, p10: 162, p50: 140, p90: 115, actual: 138 },
-  { year: 2028, p10: 168, p50: 145, p90: 120 },
-  { year: 2029, p10: 172, p50: 148, p90: 124 },
-  { year: 2030, p10: 175, p50: 150, p90: 127 },
-  { year: 2031, p10: 178, p50: 152, p90: 129 },
-  { year: 2032, p10: 180, p50: 154, p90: 131 },
-  { year: 2033, p10: 182, p50: 155, p90: 132 },
-  { year: 2034, p10: 183, p50: 156, p90: 133 },
-  { year: 2035, p10: 184, p50: 157, p90: 134 }
-];
-
-// Mock data for Tornado Chart
-const tornadoData = [
-  { parameter: 'Oil Price', negative: -18.5, positive: 22.3, baseValue: 0 },
-  { parameter: 'Permeability', negative: -15.2, positive: 18.8, baseValue: 0 },
-  { parameter: 'Recovery Factor', negative: -12.8, positive: 16.4, baseValue: 0 },
-  { parameter: 'Water Cut', negative: -10.5, positive: 9.2, baseValue: 0 },
-  { parameter: 'CAPEX', negative: -9.8, positive: 8.6, baseValue: 0 },
-  { parameter: 'Reservoir Pressure', negative: -8.3, positive: 10.1, baseValue: 0 },
-  { parameter: 'Well Count', negative: -7.5, positive: 12.5, baseValue: 0 },
-  { parameter: 'OPEX', negative: -5.2, positive: 4.8, baseValue: 0 }
-];
-
-// Mock data for Monte Carlo Distribution
-const generateDistributionData = () => {
-  const data = [];
-  for (let i = 800; i <= 3200; i += 40) {
-    const x = (i - 2000) / 400;
-    const frequency = Math.exp(-0.5 * x * x) * (1 + 0.3 * Math.sin(x * 2));
-    data.push({ value: i, frequency: frequency * 100 });
-  }
-  return data;
-};
-
-// Mock data for Correlation Scatter
-const generateCorrelationData = () => {
-  const data = [];
-  for (let i = 0; i < 200; i++) {
-    const permeability = 50 + Math.random() * 150;
-    const recoveryFactor = 0.25 + Math.random() * 0.25;
-    const npv = 1200 + permeability * 8 + recoveryFactor * 2000 + (Math.random() - 0.5) * 400;
-    data.push({
-      param1: permeability,
-      param2: recoveryFactor,
-      npv: npv
-    });
-  }
-  return data;
-};
-
-// Mock data for Time Series
-const timeSeriesData = [
-  { date: 'Jan 2023', actual: 98, simulated: 95 },
-  { date: 'Feb 2023', actual: 102, simulated: 100 },
-  { date: 'Mar 2023', actual: 105, simulated: 106 },
-  { date: 'Apr 2023', actual: 108, simulated: 109 },
-  { date: 'May 2023', actual: 112, simulated: 110 },
-  { date: 'Jun 2023', actual: 115, simulated: 114 },
-  { date: 'Jul 2023', actual: 118, simulated: 117 },
-  { date: 'Aug 2023', actual: 120, simulated: 121 },
-  { date: 'Sep 2023', actual: 122, simulated: 123 },
-  { date: 'Oct 2023', actual: 125, simulated: 124 },
-  { date: 'Nov 2023', actual: 127, simulated: 126 },
-  { date: 'Dec 2023', actual: 130, simulated: 129 }
-];
+import { useAsset } from '../context/AssetContext';
+import {
+  generateAnnualForecast,
+  hyperbolicDecline,
+  runMonteCarloNPV,
+  buildHistogramBins,
+  getPercentile,
+  calculateOATSensitivity,
+  calculateNPVSimplified,
+  calculateR2,
+  calculateMAPE,
+  generateMatchChartData,
+} from '../utils/calculations';
 
 export function DeepDiveAnalytics() {
   const [selectedTab, setSelectedTab] = useState<'production' | 'sensitivity' | 'uncertainty' | 'correlation' | 'history'>('production');
+  const { selectedAsset } = useAsset();
+
+  // ── Production Forecast P10/P50/P90 using Arps decline ───────────────
+  const productionForecastData = useMemo(() => {
+    const currentYear = new Date().getFullYear();
+    const baseRate = selectedAsset.production.oil;
+    const Di = selectedAsset.declineRate;
+    const b = selectedAsset.declineExponent;
+    const years = selectedAsset.fieldLifeYears;
+
+    return Array.from({ length: Math.min(years, 12) }, (_, i) => {
+      const year = currentYear + i;
+      const ageFromNow = i;
+      const p50Rate = hyperbolicDecline(baseRate, Di, b, ageFromNow) / 1000; // kbpd
+      const p10Rate = hyperbolicDecline(baseRate * 1.15, Di * 0.85, b, ageFromNow) / 1000;
+      const p90Rate = hyperbolicDecline(baseRate * 0.85, Di * 1.15, b, ageFromNow) / 1000;
+      // Actual = slightly below simulated with seasonal noise (deterministic)
+      const noise = 1 + 0.015 * Math.sin((2 * Math.PI * i) / 4);
+      return {
+        year,
+        p10: parseFloat(p10Rate.toFixed(1)),
+        p50: parseFloat(p50Rate.toFixed(1)),
+        p90: parseFloat(p90Rate.toFixed(1)),
+        ...(i < 4 ? { actual: parseFloat((p50Rate * noise * 0.98).toFixed(1)) } : {})
+      };
+    });
+  }, [selectedAsset]);
+
+  // ── OAT Sensitivity for Tornado Chart ────────────────────────────────
+  const tornadoData = useMemo(() => {
+    const baseNPV = calculateNPVSimplified(
+      selectedAsset.production.oil, 80, selectedAsset.opexPerBbl,
+      selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55
+    ) * 1000;
+    const oat = calculateOATSensitivity(baseNPV, {
+      'Oil Price':          { lowNPV: calculateNPVSimplified(selectedAsset.production.oil, 64, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000, highNPV: calculateNPVSimplified(selectedAsset.production.oil, 96, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000 },
+      'Permeability':       { lowNPV: calculateNPVSimplified(selectedAsset.production.oil * 0.85, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000, highNPV: calculateNPVSimplified(selectedAsset.production.oil * 1.15, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000 },
+      'Recovery Factor':    { lowNPV: calculateNPVSimplified(selectedAsset.production.oil * 0.88, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000, highNPV: calculateNPVSimplified(selectedAsset.production.oil * 1.12, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000 },
+      'Water Cut':          { lowNPV: calculateNPVSimplified(selectedAsset.production.oil * 1.05, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000, highNPV: calculateNPVSimplified(selectedAsset.production.oil * 0.95, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000 },
+      'CAPEX':              { lowNPV: calculateNPVSimplified(selectedAsset.production.oil, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM * 0.80, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000, highNPV: calculateNPVSimplified(selectedAsset.production.oil, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM * 1.20, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000 },
+      'Reservoir Pressure': { lowNPV: calculateNPVSimplified(selectedAsset.production.oil * 0.92, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000, highNPV: calculateNPVSimplified(selectedAsset.production.oil * 1.08, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000 },
+      'Well Count':         { lowNPV: calculateNPVSimplified(selectedAsset.production.oil * 0.90, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000, highNPV: calculateNPVSimplified(selectedAsset.production.oil * 1.10, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000 },
+      'OPEX':               { lowNPV: calculateNPVSimplified(selectedAsset.production.oil, 80, selectedAsset.opexPerBbl * 0.80, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000, highNPV: calculateNPVSimplified(selectedAsset.production.oil, 80, selectedAsset.opexPerBbl * 1.20, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000 },
+    });
+    return oat.slice(0, 8).map(r => ({
+      parameter: r.parameter,
+      negative: parseFloat(r.negative.toFixed(1)),
+      positive: parseFloat(r.positive.toFixed(1)),
+      baseValue: 0,
+    }));
+  }, [selectedAsset]);
+
+  // ── Monte Carlo NPV Distribution (n=5000 for performance) ────────────
+  const { mcDistribution, mcP10, mcP50, mcP90 } = useMemo(() => {
+    const sortedNPVs = runMonteCarloNPV({
+      ooip:           { min: selectedAsset.ooip * 0.75, mode: selectedAsset.ooip, max: selectedAsset.ooip * 1.25 },
+      recoveryFactor: { min: 0.30, mode: (selectedAsset.cumulativeOil / selectedAsset.ooip) + 0.10, max: 0.65 },
+      oilPrice:       { mean: 80, cv: 0.20 },
+      opexPerBbl:     { mean: selectedAsset.opexPerBbl, cv: 0.15 },
+      capexMM:        { mean: selectedAsset.remainingCapexMM, cv: 0.20 },
+      discountRate:   0.10,
+      fieldLifeYears: selectedAsset.fieldLifeYears,
+      royaltyRate:    0.05,
+      taxRate:        0.55,
+    }, 5000);
+    return {
+      mcDistribution: buildHistogramBins(sortedNPVs, 50),
+      mcP10: Math.round(getPercentile(sortedNPVs, 90)),
+      mcP50: Math.round(getPercentile(sortedNPVs, 50)),
+      mcP90: Math.round(getPercentile(sortedNPVs, 10)),
+    };
+  }, [selectedAsset]);
+
+  // ── Correlation scatter (deterministic seed via asset ID hash) ────────
+  const generateCorrelationData = () => {
+    const data = [];
+    // Use simple deterministic sequence derived from asset parameters
+    const seed = selectedAsset.ooip * 0.001 + selectedAsset.production.oil * 0.0001;
+    for (let i = 0; i < 200; i++) {
+      const t = (seed + i * 0.618) % 1; // golden ratio sequence
+      const permeability = 50 + t * 150;
+      const recoveryFactor = 0.25 + ((i * 0.137) % 1) * 0.25;
+      const npv = mcP50 + permeability * 0.8 + recoveryFactor * 500 + Math.sin(i * 0.3) * 80;
+      data.push({ param1: parseFloat(permeability.toFixed(1)), param2: parseFloat(recoveryFactor.toFixed(3)), npv: Math.round(npv) });
+    }
+    return data;
+  };
+
+  // ── History Match time series (last 12 months of actuals vs sim) ──────
+  const timeSeriesData = useMemo(() => {
+    const chartData = generateMatchChartData(
+      selectedAsset.production.oil,
+      selectedAsset.declineRate,
+      selectedAsset.declineExponent,
+      selectedAsset.firstOilYear,
+      new Date().getFullYear() - 1, 0, new Date().getFullYear(),
+      1, selectedAsset.historyMatchR2
+    );
+    const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const now = new Date();
+    return chartData.filter(p => p.observed !== null).slice(-12).map((p, i) => {
+      const m = (now.getMonth() - 12 + i + 12) % 12;
+      const y = new Date().getFullYear() - 1 + Math.floor((now.getMonth() - 12 + i + 12) / 12);
+      return { date: `${monthNames[m]} ${y}`, actual: Math.round(p.observed! / 1000), simulated: Math.round(p.simulated / 1000) };
+    });
+  }, [selectedAsset]);
+
+  // ── Compute R² and MAPE from history series ───────────────────────────
+  const hmR2 = calculateR2(timeSeriesData.map(d => d.actual), timeSeriesData.map(d => d.simulated));
+  const hmMape = calculateMAPE(timeSeriesData.map(d => d.actual), timeSeriesData.map(d => d.simulated));
 
   const handleShareDashboard = () => {
     toast.info('Share Dashboard', {
@@ -174,7 +226,7 @@ export function DeepDiveAnalytics() {
           </div>
           <div className="bg-card rounded-lg border border-card-border p-4">
             <div className="text-xs text-text-tertiary mb-1">Match Quality (R²)</div>
-            <div className="text-2xl font-bold text-success">0.94</div>
+            <div className="text-2xl font-bold text-success">{selectedAsset.historyMatchR2.toFixed(2)}</div>
             <div className="text-xs text-text-secondary mt-1">History match score</div>
           </div>
         </div>
@@ -207,13 +259,15 @@ export function DeepDiveAnalytics() {
               <div className="space-y-6">
                 <ProductionForecastChart
                   data={productionForecastData}
-                  title="Oil Production Forecast with Uncertainty Bands"
-                  unit="MBOPD"
+                  title={`${selectedAsset.name} – Oil Production Forecast with Uncertainty Bands`}
+                  unit="kBOPD"
                 />
                 <div className="bg-primary/10 rounded-lg p-4 border border-primary/30">
                   <p className="text-sm text-text-secondary">
-                    <span className="font-semibold text-primary">Insight:</span> P50 forecast shows steady production increase from 120 to 157 MBOPD over 12 years. 
-                    The P10-P90 range widens post-2028 due to increased geological uncertainty in deeper reservoir sections.
+                    <span className="font-semibold text-primary">Insight:</span> P50 forecast shows decline from{' '}
+                    {productionForecastData[0]?.p50.toFixed(0)} to {productionForecastData[productionForecastData.length - 1]?.p50.toFixed(0)} kBOPD
+                    over {productionForecastData.length} years (Arps b={selectedAsset.declineExponent}, Di={(selectedAsset.declineRate * 100).toFixed(1)}%/yr).
+                    The P10–P90 range widens post-{productionForecastData[3]?.year} due to increased geological uncertainty in deeper reservoir sections.
                   </p>
                 </div>
               </div>
@@ -228,18 +282,18 @@ export function DeepDiveAnalytics() {
                 <div className="grid grid-cols-3 gap-4">
                   <div className="bg-card rounded-lg border border-card-border p-4">
                     <div className="text-xs text-text-tertiary mb-2">Most Sensitive Parameter</div>
-                    <div className="text-lg font-semibold text-text-primary">Oil Price</div>
-                    <div className="text-xs text-text-secondary mt-1">±20% impact on NPV</div>
+                    <div className="text-lg font-semibold text-text-primary">{tornadoData[0]?.parameter ?? '—'}</div>
+                    <div className="text-xs text-text-secondary mt-1">±{tornadoData[0] ? Math.abs(tornadoData[0].positive - tornadoData[0].negative).toFixed(0) : '—'}% impact on NPV</div>
                   </div>
                   <div className="bg-card rounded-lg border border-card-border p-4">
-                    <div className="text-xs text-text-tertiary mb-2">Top Subsurface Factor</div>
-                    <div className="text-lg font-semibold text-text-primary">Permeability</div>
-                    <div className="text-xs text-text-secondary mt-1">±17% NPV variance</div>
+                    <div className="text-xs text-text-tertiary mb-2">2nd Largest Driver</div>
+                    <div className="text-lg font-semibold text-text-primary">{tornadoData[1]?.parameter ?? '—'}</div>
+                    <div className="text-xs text-text-secondary mt-1">±{tornadoData[1] ? Math.abs(tornadoData[1].positive - tornadoData[1].negative).toFixed(0) : '—'}% NPV variance</div>
                   </div>
                   <div className="bg-card rounded-lg border border-card-border p-4">
                     <div className="text-xs text-text-tertiary mb-2">Least Sensitive</div>
-                    <div className="text-lg font-semibold text-text-primary">OPEX</div>
-                    <div className="text-xs text-text-secondary mt-1">±5% impact range</div>
+                    <div className="text-lg font-semibold text-text-primary">{tornadoData[tornadoData.length - 1]?.parameter ?? '—'}</div>
+                    <div className="text-xs text-text-secondary mt-1">±{tornadoData[tornadoData.length - 1] ? Math.abs(tornadoData[tornadoData.length - 1].positive - tornadoData[tornadoData.length - 1].negative).toFixed(0) : '—'}% impact range</div>
                   </div>
                 </div>
               </div>
@@ -248,17 +302,17 @@ export function DeepDiveAnalytics() {
             {selectedTab === 'uncertainty' && (
               <div className="space-y-6">
                 <MonteCarloDistribution
-                  data={generateDistributionData()}
-                  p10={2450}
-                  p50={1850}
-                  p90={1320}
-                  title="NPV Distribution from Monte Carlo Simulation"
+                  data={mcDistribution}
+                  p10={mcP10}
+                  p50={mcP50}
+                  p90={mcP90}
+                  title={`NPV Distribution — Monte Carlo (n=5,000) — ${selectedAsset.name}`}
                   metric="NPV ($MM)"
                 />
                 <div className="bg-accent/10 rounded-lg p-4 border border-accent/30">
                   <p className="text-sm text-text-secondary">
-                    <span className="font-semibold text-accent">Monte Carlo Results:</span> Based on 12.4M scenarios, the expected NPV (P50) is $1,850M 
-                    with a 10% probability of exceeding $2,450M and a 90% confidence of achieving at least $1,320M.
+                    <span className="font-semibold text-accent">Monte Carlo Results:</span> Based on 5,000 scenarios, the expected NPV (P50) is ${mcP50.toLocaleString()}M{' '}
+                    with a 10% probability of exceeding ${mcP10.toLocaleString()}M and a 90% confidence of achieving at least ${mcP90.toLocaleString()}M.
                   </p>
                 </div>
               </div>
@@ -291,18 +345,18 @@ export function DeepDiveAnalytics() {
               <div className="space-y-6">
                 <TimeSeriesComparison
                   data={timeSeriesData}
-                  title="History Match Quality: Actual vs AI Led Simulation"
-                  metric="Oil Production (MBOPD)"
+                  title={`History Match Quality: Actual vs AI Simulation — ${selectedAsset.name}`}
+                  metric="Oil Production (kBOPD)"
                 />
                 <div className="grid grid-cols-3 gap-4">
                   <div className="bg-card rounded-lg border border-card-border p-4">
                     <div className="text-xs text-text-tertiary mb-2">R² Score</div>
-                    <div className="text-2xl font-semibold text-success">0.94</div>
+                    <div className="text-2xl font-semibold text-success">{hmR2.toFixed(2)}</div>
                     <div className="text-xs text-text-secondary mt-1">Excellent match quality</div>
                   </div>
                   <div className="bg-card rounded-lg border border-card-border p-4">
-                    <div className="text-xs text-text-tertiary mb-2">Average Error</div>
-                    <div className="text-2xl font-semibold text-primary">2.3%</div>
+                    <div className="text-xs text-text-tertiary mb-2">MAPE</div>
+                    <div className="text-2xl font-semibold text-primary">{hmMape.toFixed(1)}%</div>
                     <div className="text-xs text-text-secondary mt-1">Within acceptable range</div>
                   </div>
                   <div className="bg-card rounded-lg border border-card-border p-4">

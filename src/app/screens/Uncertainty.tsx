@@ -20,6 +20,8 @@ import { TornadoChart } from '../components/TornadoChart';
 import { SimulationPathwayComparison } from '../components/SimulationPathwayComparison';
 import { useLayer } from '../context/LayerContext';
 import { LayerNavigation } from '../components/layers/LayerNavigation';
+import { useAsset } from '../context/AssetContext';
+import { calculateNPVSimplified, calculateOATSensitivity } from '../utils/calculations';
 
 const uncertaintyCategories = [
   {
@@ -74,6 +76,39 @@ const uncertaintyCategories = [
 export function Uncertainty() {
   const { openChat } = useChat();
   const { globalLayerPreference, setGlobalLayerPreference } = useLayer();
+  const { selectedAsset } = useAsset();
+
+  // ── One-at-a-Time (OAT) sensitivity — varies each parameter ±20% ──
+  const baseNPV = calculateNPVSimplified(
+    selectedAsset.production.oil, 80, selectedAsset.opexPerBbl,
+    selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55
+  ) * 1000; // $MM
+
+  const oatResults = calculateOATSensitivity(baseNPV, {
+    'Oil Price':           { lowNPV: calculateNPVSimplified(selectedAsset.production.oil, 64, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000, highNPV: calculateNPVSimplified(selectedAsset.production.oil, 96, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000 },
+    'Permeability':        { lowNPV: calculateNPVSimplified(selectedAsset.production.oil * 0.85, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000, highNPV: calculateNPVSimplified(selectedAsset.production.oil * 1.15, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000 },
+    'Recovery Factor':     { lowNPV: calculateNPVSimplified(selectedAsset.production.oil * 0.88, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000, highNPV: calculateNPVSimplified(selectedAsset.production.oil * 1.12, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000 },
+    'CAPEX':               { lowNPV: calculateNPVSimplified(selectedAsset.production.oil, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM * 0.80, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000, highNPV: calculateNPVSimplified(selectedAsset.production.oil, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM * 1.20, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000 },
+    'OPEX/bbl':            { lowNPV: calculateNPVSimplified(selectedAsset.production.oil, 80, selectedAsset.opexPerBbl * 0.80, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000, highNPV: calculateNPVSimplified(selectedAsset.production.oil, 80, selectedAsset.opexPerBbl * 1.20, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000 },
+    'Reservoir Pressure':  { lowNPV: calculateNPVSimplified(selectedAsset.production.oil * 0.92, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000, highNPV: calculateNPVSimplified(selectedAsset.production.oil * 1.08, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000 },
+    'Well Count':          { lowNPV: calculateNPVSimplified(selectedAsset.production.oil * 0.90, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000, highNPV: calculateNPVSimplified(selectedAsset.production.oil * 1.10, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000 },
+    'Water Cut':           { lowNPV: calculateNPVSimplified(selectedAsset.production.oil * 1.05, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000, highNPV: calculateNPVSimplified(selectedAsset.production.oil * 0.95, 80, selectedAsset.opexPerBbl, selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55) * 1000 },
+  });
+
+  // Convert OAT results to tornado chart format expected by TornadoChart component
+  const tornadoData = oatResults.slice(0, 8).map(r => ({
+    parameter: r.parameter,
+    negative: parseFloat(r.negative.toFixed(1)),
+    positive: parseFloat(r.positive.toFixed(1)),
+    baseValue: 0,
+  }));
+
+  // Dynamic sensitivity drivers for L2 simplified view
+  const topDrivers = oatResults.slice(0, 3).map((r, idx) => ({
+    name: r.parameter,
+    impact: Math.round(r.impact),
+    color: idx === 0 ? 'bg-success' : idx === 1 ? 'bg-primary' : 'bg-warning',
+  }));
 
   const handleViewDocumentation = () => {
     toast.info('Opening uncertainty documentation', {
@@ -259,11 +294,7 @@ export function Uncertainty() {
               <p className="text-sm text-text-secondary mb-6">Parameters with highest impact on production outcomes</p>
               
               <div className="space-y-4">
-                {[
-                  { name: 'Porosity Variance', impact: 60, color: 'bg-success' },
-                  { name: 'Aquifer Strength', impact: 38, color: 'bg-primary' },
-                  { name: 'Oil Price Volatility', impact: 25, color: 'bg-warning' }
-                ].map((item) => (
+                {topDrivers.map((item) => (
                   <div key={item.name}>
                     <div className="flex items-center justify-between text-sm mb-2">
                       <span className="text-text-primary">{item.name}</span>
@@ -385,15 +416,13 @@ export function Uncertainty() {
 
             {/* Tornado Chart - Sensitivity Ranking */}
             <div className="mt-6">
-              <TornadoChart 
+              <TornadoChart
                 title="Sensitivity Analysis - Key Drivers"
-                data={[
-                  { variable: 'Porosity Variance', impact: 60, direction: 'positive' },
-                  { variable: 'Aquifer Strength', impact: 38, direction: 'neutral' },
-                  { variable: 'Oil Price Volatility', impact: 25, direction: 'positive' },
-                  { variable: 'Saturation Range', impact: 18, direction: 'negative' },
-                  { variable: 'Fault Transmissibility', impact: 12, direction: 'neutral' }
-                ]}
+                data={oatResults.slice(0, 5).map(r => ({
+                  variable: r.parameter,
+                  impact: Math.round(r.impact),
+                  direction: r.direction,
+                }))}
               />
             </div>
 

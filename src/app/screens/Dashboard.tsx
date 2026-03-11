@@ -19,6 +19,16 @@ import { useAsset } from '../context/AssetContext';
 import { useLayer } from '../context/LayerContext';
 import { useState } from 'react';
 import { toast } from 'sonner';
+import {
+  calculateRecoveryFactor,
+  calculateNPVSimplified,
+  calculateCapitalEfficiency,
+  calculateWaterCut,
+  calculateSweepEfficiency,
+  estimateReservoirPressure,
+  formatNPV,
+  formatProductionRate,
+} from '../utils/calculations';
 
 const dataSources = [
   { name: 'OSD Corporate DB', status: 'connected', time: '2h ago' },
@@ -34,9 +44,46 @@ export function Dashboard() {
   const [showBriefing, setShowBriefing] = useState(true);
   const [showDataSourcesModal, setShowDataSourcesModal] = useState(false);
 
-  // Calculate NPV based on oil production (simplified formula for demonstration)
-  const estimatedNPV = (selectedAsset.production.oil / 1000) * 3.1; // Rough NPV in billions
-  const npvFormatted = estimatedNPV >= 1 ? `$${estimatedNPV.toFixed(1)}B` : `$${(estimatedNPV * 1000).toFixed(0)}M`;
+  // ── Derived KPI values from engineering formulas ──────────────────
+  // RF (%) = Cumulative Oil (MMbbl) / OOIP (MMbbl) × 100
+  const recoveryFactor = calculateRecoveryFactor(
+    selectedAsset.cumulativeOil,
+    selectedAsset.ooip
+  );
+
+  // NPV using annuity DCF: (Annual Net Revenue × PVF) − PV(CapEx)
+  const estimatedNPV = calculateNPVSimplified(
+    selectedAsset.production.oil,
+    80,                                 // Brent crude $/bbl
+    selectedAsset.opexPerBbl,
+    selectedAsset.remainingCapexMM,
+    0.10,                               // 10% WACC
+    selectedAsset.fieldLifeYears,
+    0.05,                               // 5% royalty
+    0.55                                // 55% UAE upstream tax
+  );
+  const npvFormatted = formatNPV(estimatedNPV);
+
+  // VIR = NPV / PV(CapEx)
+  const pvCapex = selectedAsset.remainingCapexMM / 1000 /
+    Math.pow(1 + 0.10, selectedAsset.fieldLifeYears / 2); // mid-point discounting
+  const capitalEfficiency = calculateCapitalEfficiency(estimatedNPV, pvCapex);
+
+  // WC (%) = Q_water / (Q_oil + Q_water) × 100
+  const waterCut = calculateWaterCut(
+    selectedAsset.production.water,
+    selectedAsset.production.oil
+  );
+
+  // Reservoir pressure from material balance
+  const currentPressure = estimateReservoirPressure(
+    selectedAsset.initialPressure,
+    selectedAsset.ooip,
+    selectedAsset.cumulativeOil
+  );
+
+  // Sweep efficiency from mobility ratio and permeability variation
+  const sweepEfficiency = calculateSweepEfficiency(selectedAsset.mobilityRatio);
 
   // Dynamic Module Cards
   const dynamicModuleCards = [
@@ -47,7 +94,7 @@ export function Dashboard() {
       iconColor: '#3B82F6',
       status: '78% Complete',
       statusColor: 'bg-amber-500',
-      metrics: [`${selectedAsset.activeWells} of ${selectedAsset.wells} items validated`, '3 critical gaps'],
+      metrics: [`${selectedAsset.dataCompleteness.toFixed(0)}% data completeness`, `${selectedAsset.activeWells} wells validated`],
       progress: 78,
       hasAI: true,
       path: '/data-health'
@@ -59,7 +106,7 @@ export function Dashboard() {
       iconColor: '#6B7280',
       status: 'Baseline Ready',
       statusColor: 'bg-green-500',
-      metrics: ['Eclipse v2024.1', `${selectedAsset.activeWells} wells matched`],
+      metrics: ['Eclipse v2024.1', `${selectedAsset.activeWells} wells | R²=${selectedAsset.historyMatchR2.toFixed(2)}`],
       layer: 'Layer 1 Only',
       path: '/history-matching'
     },
@@ -121,7 +168,7 @@ export function Dashboard() {
           {
             id: 'l1-recovery',
             title: 'Est. Ultimate Recovery',
-            value: `${selectedAsset.recovery}%`,
+            value: `${recoveryFactor.toFixed(1)}%`,
             trend: '+2.3%',
             trendUp: true,
             icon: TrendingUp,
@@ -140,9 +187,9 @@ export function Dashboard() {
           },
           {
             id: 'l1-roi',
-            title: 'Capital Efficiency (ROI)',
-            value: '22%',
-            trend: '+1.5%',
+            title: 'Capital Efficiency (VIR)',
+            value: `${capitalEfficiency.toFixed(2)}x`,
+            trend: '+0.04x',
             trendUp: true,
             icon: PieChart,
             iconColor: 'text-accent',
@@ -153,9 +200,9 @@ export function Dashboard() {
         return [
           {
             id: 'l2-production',
-            title: 'Daily Production (Avg)',
-            value: '85.2 kbpd',
-            trend: '+4.1%',
+            title: 'Daily Production (Oil)',
+            value: formatProductionRate(selectedAsset.production.oil),
+            trend: `+${((selectedAsset.declineRate * -100) + 4.1).toFixed(1)}%`,
             trendUp: true,
             icon: BarChart3,
             iconColor: 'text-primary',
@@ -164,7 +211,7 @@ export function Dashboard() {
           {
             id: 'l2-water-cut',
             title: 'Water Cut',
-            value: `${selectedAsset.waterCut}%`,
+            value: `${waterCut.toFixed(1)}%`,
             trend: '-1.5%',
             trendUp: true,
             icon: Droplet,
@@ -175,7 +222,7 @@ export function Dashboard() {
             id: 'l2-wells',
             title: 'Active Well Count',
             value: `${selectedAsset.activeWells}/${selectedAsset.wells}`,
-            trend: '92% Uptime',
+            trend: `${Math.round((selectedAsset.activeWells / selectedAsset.wells) * 100)}% Uptime`,
             trendUp: true,
             icon: Zap,
             iconColor: 'text-success',
@@ -187,7 +234,7 @@ export function Dashboard() {
           {
             id: 'l3-hm',
             title: 'Global HM Quality',
-            value: '98.5%',
+            value: `${(selectedAsset.historyMatchR2 * 100).toFixed(1)}%`,
             trend: '+0.5%',
             trendUp: true,
             icon: Target,
@@ -195,13 +242,13 @@ export function Dashboard() {
             iconBg: 'bg-success/10',
             source: 'Eclipse Sim Server',
             updated: '12:00:00',
-            quality: '98.5%'
+            quality: `${selectedAsset.dataCompleteness.toFixed(0)}%`
           },
           {
             id: 'l3-pressure',
             title: 'Avg Res Pressure',
-            value: '3,450 psi',
-            trend: '-12 psi',
+            value: `${Math.round(currentPressure).toLocaleString()} psi`,
+            trend: `-${Math.round(selectedAsset.initialPressure - currentPressure)} psi`,
             trendUp: false,
             icon: Gauge,
             iconColor: 'text-warning',
@@ -213,7 +260,7 @@ export function Dashboard() {
           {
             id: 'l3-sweep',
             title: 'Sweep Efficiency',
-            value: '62%',
+            value: `${sweepEfficiency.toFixed(0)}%`,
             trend: '+1.5%',
             trendUp: true,
             icon: Layers,

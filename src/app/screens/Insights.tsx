@@ -8,12 +8,20 @@ import { ParetoFrontChart } from '../components/ParetoFrontChart';
 import { HoverPreview } from '../components/layers/HoverPreview';
 import { WithDepthIndicator } from '../components/layers/DepthIndicator';
 import { TrendingUp, AlertTriangle, Lightbulb, DollarSign, BarChart3, Zap, CheckCircle, Sparkles, Download, RefreshCw, FileText, Save, X, Loader2, Settings, Clock, Brain } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { toast } from 'sonner';
 import { useLayer } from '../context/LayerContext';
 import { LayerNavigation } from '../components/layers/LayerNavigation';
 import { useConfirmation } from '../context/ConfirmationContext';
 import { useNotifications } from '../context/NotificationsContext';
+import { useAsset } from '../context/AssetContext';
+import {
+  calculateAIConfidence,
+  calculateNPVSimplified,
+  calculateRecoveryFactor,
+  calculateIRR,
+  formatNPV,
+} from '../utils/calculations';
 
 interface Insight {
   id: number;
@@ -92,6 +100,47 @@ export function Insights() {
   const { globalLayerPreference, setGlobalLayerPreference } = useLayer();
   const { confirmSuccess, confirmWarning } = useConfirmation();
   const { addNotification } = useNotifications();
+  const { selectedAsset } = useAsset();
+
+  // ── AI confidence from asset quality metrics ─────────────────────────
+  const aiConf = useMemo(() => calculateAIConfidence(
+    selectedAsset.dataCompleteness,
+    selectedAsset.historyMatchR2,
+    0.75
+  ), [selectedAsset]);
+
+  // ── Scenario NPVs derived from asset parameters ──────────────────────
+  const baseNPV_MM = useMemo(() => calculateNPVSimplified(
+    selectedAsset.production.oil, 80, selectedAsset.opexPerBbl,
+    selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55
+  ) * 1000, [selectedAsset]);
+
+  const currentRF = calculateRecoveryFactor(selectedAsset.cumulativeOil, selectedAsset.ooip);
+
+  // Pareto-optimal scenarios: vary production rate (well count proxy) and water-cut trade-off
+  const paretoScenarios = useMemo(() => [
+    { id: 'A', name: 'Conservative',  npv: Math.round(baseNPV_MM * 0.86), waterCut: Math.round(selectedAsset.waterCut * 0.85), recovery: parseFloat((currentRF + 1.5).toFixed(1)), risk: 'Low' as const },
+    { id: 'B', name: 'Recommended',   npv: Math.round(baseNPV_MM * 1.00), waterCut: Math.round(selectedAsset.waterCut), recovery: parseFloat((currentRF + 3.0).toFixed(1)), risk: 'Medium' as const, isRecommended: true },
+    { id: 'C', name: 'Aggressive',    npv: Math.round(baseNPV_MM * 1.10), waterCut: Math.round(selectedAsset.waterCut * 1.18), recovery: parseFloat((currentRF + 4.0).toFixed(1)), risk: 'High' as const },
+    { id: 'D', name: 'Low Risk',      npv: Math.round(baseNPV_MM * 0.76), waterCut: Math.round(selectedAsset.waterCut * 0.72), recovery: parseFloat((currentRF + 0.5).toFixed(1)), risk: 'Low' as const },
+    { id: 'E', name: 'Max Production',npv: Math.round(baseNPV_MM * 1.14), waterCut: Math.round(selectedAsset.waterCut * 1.35), recovery: parseFloat((currentRF + 5.0).toFixed(1)), risk: 'High' as const },
+    { id: 'F', name: 'Phased Dev.',   npv: Math.round(baseNPV_MM * 0.90), waterCut: Math.round(selectedAsset.waterCut * 0.90), recovery: parseFloat((currentRF + 2.0).toFixed(1)), risk: 'Low' as const },
+    { id: 'G', name: 'Infill Drill',  npv: Math.round(baseNPV_MM * 1.05), waterCut: Math.round(selectedAsset.waterCut * 1.08), recovery: parseFloat((currentRF + 3.5).toFixed(1)), risk: 'Medium' as const },
+    { id: 'H', name: 'Enhanced WI',   npv: Math.round(baseNPV_MM * 0.95), waterCut: Math.round(selectedAsset.waterCut * 1.05), recovery: parseFloat((currentRF + 2.8).toFixed(1)), risk: 'Medium' as const },
+  ], [baseNPV_MM, selectedAsset, currentRF]);
+
+  // Dynamic insight confidence scores based on AI confidence
+  const dynamicInsights = useMemo(() => initialInsights.map(ins => ({
+    ...ins,
+    confidence: ins.confidence !== null ? Math.round(
+      ins.confidence * (aiConf.overall / 87)
+    ) : null,
+    metrics: ins.id === 1 ? {
+      npv: formatNPV(baseNPV_MM / 1000),
+      capex: selectedAsset.remainingCapexMM >= 1000 ? `$${(selectedAsset.remainingCapexMM / 1000).toFixed(1)}B` : `$${Math.round(selectedAsset.remainingCapexMM)}M`,
+      irr: `${calculateIRR([-selectedAsset.remainingCapexMM, ...Array(selectedAsset.fieldLifeYears).fill((selectedAsset.production.oil * 365 * (80 - selectedAsset.opexPerBbl) * 0.95 * 0.45) / 1e6)]).toFixed(0)}%`
+    } : ins.metrics
+  })), [aiConf, baseNPV_MM, selectedAsset]);
 
   // AI Generation state
   const [isGenerating, setIsGenerating] = useState(false);
@@ -114,17 +163,6 @@ export function Insights() {
     { id: '2', timestamp: 'Feb 11, 2026, 3:45 PM', insightCount: 7, confidence: 84 },
     { id: '3', timestamp: 'Feb 10, 2026, 10:15 AM', insightCount: 6, confidence: 82 }
   ]);
-
-  const paretoScenarios = [
-    { id: 'A', name: 'Scenario A', npv: 1300, waterCut: 28, recovery: 44, risk: 'Low' as const },
-    { id: 'B', name: 'Scenario B', npv: 1400, waterCut: 32, recovery: 46, risk: 'Medium' as const, isRecommended: true },
-    { id: 'C', name: 'Scenario C', npv: 1500, waterCut: 38, recovery: 47, risk: 'High' as const },
-    { id: 'D', name: 'Scenario D', npv: 1100, waterCut: 24, recovery: 41, risk: 'Low' as const },
-    { id: 'E', name: 'Scenario E', npv: 1600, waterCut: 42, recovery: 48, risk: 'High' as const },
-    { id: 'F', name: 'Scenario F', npv: 1250, waterCut: 30, recovery: 43, risk: 'Low' as const },
-    { id: 'G', name: 'Scenario G', npv: 1450, waterCut: 35, recovery: 46, risk: 'Medium' as const },
-    { id: 'H', name: 'Scenario H', npv: 1350, waterCut: 34, recovery: 45, risk: 'Medium' as const }
-  ];
 
   // Generate AI insights
   const handleGenerateInsights = async () => {
@@ -343,10 +381,8 @@ export function Insights() {
     });
   };
 
-  const overallConfidence = Math.round(
-    insights.filter(i => i.confidence).reduce((sum, i) => sum + (i.confidence || 0), 0) / 
-    insights.filter(i => i.confidence).length
-  );
+  // Overall confidence = AI composite score from asset quality
+  const overallConfidence = Math.round(aiConf.overall);
 
   return (
     <div className="min-h-screen bg-background-primary">
@@ -490,7 +526,7 @@ export function Insights() {
 
             {/* Key Insights Summary */}
             <div className="grid grid-cols-3 gap-6">
-              {insights.slice(0, 3).map((insight) => {
+              {dynamicInsights.slice(0, 3).map((insight) => {
                 const Icon = insight.icon;
                 return (
                   <div key={insight.id} className={`bg-card rounded-lg p-5 border-l-4 ${insight.borderColor} border border-card-border`}>
@@ -539,7 +575,7 @@ export function Insights() {
             <div className="grid grid-cols-3 gap-6">
               {/* Main Insights */}
               <div className="col-span-2 space-y-4">
-                {insights.map((insight) => {
+                {dynamicInsights.map((insight) => {
                   const Icon = insight.icon;
                   return (
                     <div
@@ -736,7 +772,7 @@ export function Insights() {
               </div>
 
               <div className="space-y-4">
-                {insights.map((insight) => {
+                {dynamicInsights.map((insight) => {
                   const Icon = insight.icon;
                   return (
                     <div

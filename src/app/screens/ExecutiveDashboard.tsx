@@ -25,16 +25,51 @@ import {
 import { useChat } from '../context/ChatContext';
 import { useNotifications } from '../context/NotificationsContext';
 import { useConfirmation } from '../context/ConfirmationContext';
+import { availableAssets } from '../context/AssetContext';
+import {
+  calculateNPVSimplified,
+  calculateCapitalEfficiency,
+  calculateRiskAdjustedReturn,
+  calculateFDPCompletion,
+  aggregatePortfolioNPV,
+  portfolioCapitalEfficiency,
+  formatNPV,
+} from '../utils/calculations';
 import { NotificationsModal } from '../components/modals/NotificationsModal';
 import { exportToCSV, exportToExcel, exportToJSON } from '../utils/exportUtils';
 import { toast } from 'sonner';
 import { useState } from 'react';
 
+// ── Portfolio KPIs — computed from all 9 ADNOC assets ─────────────────
+const _fieldNPVs = availableAssets.map(a =>
+  calculateNPVSimplified(a.production.oil, 80, a.opexPerBbl, a.remainingCapexMM, 0.10, a.fieldLifeYears, 0.05, 0.55)
+);
+const _portfolioNPV = aggregatePortfolioNPV(_fieldNPVs);
+
+const _fieldCapex = availableAssets.map(a => ({
+  npvB: calculateNPVSimplified(a.production.oil, 80, a.opexPerBbl, a.remainingCapexMM, 0.10, a.fieldLifeYears, 0.05, 0.55),
+  capexB: a.remainingCapexMM / 1000
+}));
+const _portVIR = portfolioCapitalEfficiency(_fieldCapex);
+
+// Risk-adjusted return = P50 NPV / Total CapEx × 100
+const _totalCapexMM = availableAssets.reduce((s, a) => s + a.remainingCapexMM, 0);
+const _rar = calculateRiskAdjustedReturn(_portfolioNPV * 1000, _totalCapexMM);
+
+// FDP completion based on weighted milestones (reflects current state)
+const _fdpCompletion = calculateFDPCompletion([
+  { id: 'data-health',      name: 'Data Health',        weight: 0.20, completionPct: 78 },
+  { id: 'history-match',    name: 'History Matching',   weight: 0.25, completionPct: 65 },
+  { id: 'uncertainty',      name: 'Uncertainty',        weight: 0.20, completionPct: 50 },
+  { id: 'insights',         name: 'Insights',           weight: 0.20, completionPct: 15 },
+  { id: 'fdp-summary',      name: 'FDP Summary',        weight: 0.15, completionPct: 0 },
+]);
+
 const kpis = [
-  { label: 'Portfolio NPV', value: '$2.4B', trend: '+12%', trendUp: true, sparkline: true },
-  { label: 'Risk-Adjusted Return', value: '18.3%', trend: 'amber', trendUp: false, sparkline: false },
-  { label: 'Capital Efficiency', value: '0.87x', trend: 'green', trendUp: true, sparkline: false },
-  { label: 'FDP Completion', value: '42%', trend: null, trendUp: false, sparkline: false, progress: true }
+  { label: 'Portfolio NPV', value: formatNPV(_portfolioNPV), trend: '+12%', trendUp: true, sparkline: true },
+  { label: 'Risk-Adjusted Return', value: `${_rar.toFixed(1)}%`, trend: 'amber', trendUp: false, sparkline: false },
+  { label: 'Capital Efficiency', value: `${_portVIR.toFixed(2)}x`, trend: 'green', trendUp: true, sparkline: false },
+  { label: 'FDP Completion', value: `${Math.round(_fdpCompletion)}%`, trend: null, trendUp: false, sparkline: false, progress: true }
 ];
 
 const fdpPipeline = [

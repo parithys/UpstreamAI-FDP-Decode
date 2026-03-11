@@ -8,6 +8,14 @@ import { FileText, Download, Share2, CheckCircle2, Mail } from 'lucide-react';
 import { toast } from 'sonner';
 import { useLayer } from '../context/LayerContext';
 import { LayerNavigation } from '../components/layers/LayerNavigation';
+import { useAsset } from '../context/AssetContext';
+import {
+  calculateNPVSimplified,
+  calculateRecoveryFactor,
+  calculateIRR,
+  calculateAIConfidence,
+  formatNPV,
+} from '../utils/calculations';
 
 const actionItems = [
   {
@@ -65,6 +73,41 @@ export function FDPSummary() {
   const [isExporting, setIsExporting] = useState<string | null>(null);
   const [isSharing, setIsSharing] = useState(false);
   const { globalLayerPreference, setGlobalLayerPreference } = useLayer();
+  const { selectedAsset } = useAsset();
+
+  // ── Key FDP Metrics — computed from engineering formulas ─────────────
+  const npvB = calculateNPVSimplified(
+    selectedAsset.production.oil, 80, selectedAsset.opexPerBbl,
+    selectedAsset.remainingCapexMM, 0.10, selectedAsset.fieldLifeYears, 0.05, 0.55
+  );
+  const npvLabel = formatNPV(npvB);
+
+  // Future recovery factor = current RF + projected improvement from new wells
+  const currentRF = calculateRecoveryFactor(selectedAsset.cumulativeOil, selectedAsset.ooip);
+  const projectedRF = Math.min(65, currentRF + 4.0); // FDP targets +4% RF improvement
+
+  const capexLabel = selectedAsset.remainingCapexMM >= 1000
+    ? `$${(selectedAsset.remainingCapexMM / 1000).toFixed(1)}B`
+    : `$${Math.round(selectedAsset.remainingCapexMM)}M`;
+
+  // Estimated months to first oil based on field development phase
+  const firstOilMonths = selectedAsset.status === 'development' ? 12 : 18;
+
+  // AI confidence scoring
+  const aiConf = calculateAIConfidence(
+    selectedAsset.dataCompleteness,
+    selectedAsset.historyMatchR2,
+    0.75 // 3/4 uncertainty categories configured
+  );
+
+  // Simple IRR estimate using annuity cash flows
+  const annualNetCF_M = (selectedAsset.production.oil * 365 * (80 - selectedAsset.opexPerBbl) *
+    (1 - 0.05) * (1 - 0.55)) / 1e6;
+  const irrCashFlows = [
+    -selectedAsset.remainingCapexMM,
+    ...Array(selectedAsset.fieldLifeYears).fill(annualNetCF_M)
+  ];
+  const irr = calculateIRR(irrCashFlows);
 
   const handleExportPDF = () => {
     setIsExporting('pdf');
@@ -212,22 +255,22 @@ export function FDPSummary() {
             <div className="grid grid-cols-4 gap-4">
               <div className="bg-card border border-card-border rounded-lg p-5 shadow-glow">
                 <div className="text-sm text-text-secondary mb-1">Recommended NPV</div>
-                <div className="text-3xl font-bold text-text-primary">$2.4B</div>
-                <div className="text-sm text-success mt-1">+14% vs previous</div>
+                <div className="text-3xl font-bold text-text-primary">{npvLabel}</div>
+                <div className="text-sm text-success mt-1">IRR: {irr.toFixed(1)}%</div>
               </div>
               <div className="bg-card border border-card-border rounded-lg p-5 shadow-glow">
-                <div className="text-sm text-text-secondary mb-1">Recovery Factor</div>
-                <div className="text-3xl font-bold text-text-primary">47%</div>
-                <div className="text-sm text-success mt-1">+3% improvement</div>
+                <div className="text-sm text-text-secondary mb-1">Target Recovery Factor</div>
+                <div className="text-3xl font-bold text-text-primary">{projectedRF.toFixed(0)}%</div>
+                <div className="text-sm text-success mt-1">+{(projectedRF - currentRF).toFixed(1)}% improvement</div>
               </div>
               <div className="bg-card border border-card-border rounded-lg p-5 shadow-glow">
                 <div className="text-sm text-text-secondary mb-1">Total CapEx</div>
-                <div className="text-3xl font-bold text-text-primary">$1.2B</div>
+                <div className="text-3xl font-bold text-text-primary">{capexLabel}</div>
                 <div className="text-sm text-accent mt-1">Within budget</div>
               </div>
               <div className="bg-card border border-card-border rounded-lg p-5 shadow-glow">
                 <div className="text-sm text-text-secondary mb-1">Time to First Oil</div>
-                <div className="text-3xl font-bold text-text-primary">18mo</div>
+                <div className="text-3xl font-bold text-text-primary">{firstOilMonths}mo</div>
                 <div className="text-sm text-accent mt-1">On schedule</div>
               </div>
             </div>
@@ -332,22 +375,22 @@ export function FDPSummary() {
             <div className="grid grid-cols-4 gap-4">
               <div className="bg-card border border-card-border rounded-lg p-5 shadow-glow">
                 <div className="text-sm text-text-secondary mb-1">Recommended NPV</div>
-                <div className="text-3xl font-bold text-text-primary">$2.4B</div>
-                <div className="text-sm text-success mt-1">+14% vs previous</div>
+                <div className="text-3xl font-bold text-text-primary">{npvLabel}</div>
+                <div className="text-sm text-success mt-1">IRR: {irr.toFixed(1)}%</div>
               </div>
               <div className="bg-card border border-card-border rounded-lg p-5 shadow-glow">
-                <div className="text-sm text-text-secondary mb-1">Recovery Factor</div>
-                <div className="text-3xl font-bold text-text-primary">47%</div>
-                <div className="text-sm text-success mt-1">+3% improvement</div>
+                <div className="text-sm text-text-secondary mb-1">Target Recovery Factor</div>
+                <div className="text-3xl font-bold text-text-primary">{projectedRF.toFixed(0)}%</div>
+                <div className="text-sm text-success mt-1">+{(projectedRF - currentRF).toFixed(1)}% improvement</div>
               </div>
               <div className="bg-card border border-card-border rounded-lg p-5 shadow-glow">
                 <div className="text-sm text-text-secondary mb-1">Total CapEx</div>
-                <div className="text-3xl font-bold text-text-primary">$1.2B</div>
+                <div className="text-3xl font-bold text-text-primary">{capexLabel}</div>
                 <div className="text-sm text-accent mt-1">Within budget</div>
               </div>
               <div className="bg-card border border-card-border rounded-lg p-5 shadow-glow">
                 <div className="text-sm text-text-secondary mb-1">Time to First Oil</div>
-                <div className="text-3xl font-bold text-text-primary">18mo</div>
+                <div className="text-3xl font-bold text-text-primary">{firstOilMonths}mo</div>
                 <div className="text-sm text-accent mt-1">On schedule</div>
               </div>
             </div>
@@ -449,15 +492,15 @@ export function FDPSummary() {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between p-2 bg-background-secondary rounded">
                     <span className="text-sm text-text-primary">Data Quality</span>
-                    <Badge variant="success">96%</Badge>
+                    <Badge variant="success">{aiConf.dataQuality.toFixed(0)}%</Badge>
                   </div>
                   <div className="flex items-center justify-between p-2 bg-background-secondary rounded">
                     <span className="text-sm text-text-primary">Model Confidence</span>
-                    <Badge variant="success">87%</Badge>
+                    <Badge variant="success">{aiConf.modelConfidence.toFixed(0)}%</Badge>
                   </div>
                   <div className="flex items-center justify-between p-2 bg-background-secondary rounded">
                     <span className="text-sm text-text-primary">Insight Reliability</span>
-                    <Badge variant="success">91%</Badge>
+                    <Badge variant="success">{aiConf.insightReliability.toFixed(0)}%</Badge>
                   </div>
                 </div>
               </div>
